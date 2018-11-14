@@ -25,4 +25,4 @@
 
 - data available:
   - questioner done a few years ago
-  - Nov. workshop to learn about data needs
+  - Nov. workshop to learn about data needs.
