@@ -38,7 +38,7 @@ global {
 	/////////User interaction starts here
 	list<sand_sources> moved_agents ;
 	point target;
-	geometry zone <- circle(20);
+	geometry zone <- circle(100);
 	bool can_drop;
 
 	action kill {
@@ -371,7 +371,7 @@ species sand_sources{
 		if (!(moved_agents contains self)){}
 	}
 ////////////User interaction ends here
-	aspect default {draw circle(5) color:color;}
+	aspect default {draw circle(15) color:color;}
 }
 
 species sand skills:[moving]{
@@ -416,7 +416,7 @@ experiment SWS type: gui {
 	parameter "Truck capacity (m3)" var: truck_capacity init:90 min:1 max:200 category: "Set up";
 	parameter "Time horizon of phase (months)" var: time_horizon init:12 min:1 max:36 category: "Set up";
 	parameter "% of Boat usage" var: boat_proportion init:0 min:0 max:100 category: "Set up";
-	parameter "Simulation Speed" var:cycle_equals init:0.25 min:0.05 max:2.0 category:"Calibrating";
+	parameter "Simulation Speed" var:cycle_equals init:1.0 min:0.5 max:2.0 category:"Calibrating";
 	parameter "Starting Hour" var:current_hour init:12 min:0 max:23 category:"Calibrating";
 	parameter "Speed Variation" var: adaptative_speed_factor init:10 min:1 max:100 category:"Calibrating";
 	output {
