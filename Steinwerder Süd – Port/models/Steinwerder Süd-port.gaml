@@ -23,6 +23,7 @@ global {
 	//file shape_shoreline<-file(Scenario + "shoreline.shp");
 	
 	csv_file traffic_counts_file <- csv_file((Scenario + "_2019_09_Neuhof_5min-oneday-1.csv"),true);
+	csv_file traffic_od_file <- csv_file((Scenario + "_Origin-Destination-model.csv"),true);
 	csv_file traffic_lights_schedules <- csv_file((Scenario + "_traffic_lights.csv"),true);
 	
 	geometry shape <- envelope(road_traffic) + 100.0;
@@ -143,6 +144,7 @@ global {
 		//create railway from:railway_traffic; railway_network <- as_edge_graph(railway);
 		create traffic_counters from:traffic_counters_file with:[name:string(read("name")),type:string(read("gate"))];
 		create traffic_counts from:traffic_counts_file with:[counter:string(read("Spur")), day_of_week:int(read("Day_of_week")),hour:int(read("Hour")),minute:int(read("Minute")),nb_truck:int(read("Lkw")),sp_truck:int(read("Lkw_avgSpeed")),nb_car:int(read("Pkw")),sp_car:int(read("Pkw_avgSpeed"))];
+		create origin_destinations from:traffic_od_file with:[destination:string(read("destination")),counter:string(read("counter")),hour:int(read("hour")),minute:int(read("minute")),nb_truck:int(read("nb_trucks")),nb_car:int(read("nb_cars"))];
 		create traffic_light from:shapefile_traffic_lights  with:[group:string(read("group")),crossing:int(read("crossing"))]; //duration_sequence:int(read("duration_s")),start_green:int(read("start_gree")),end_green:int(read("end_green")),
 		create traffic_light_schedule from:traffic_lights_schedules with:[Crossing:int(read("Crossing")), Programme:int(read("Programme")), Group:string(read("Group")), Duration:int(read("Duration")), Start_green:int(read("Start_green")), End_green:int(read("End_green")), Day_of_week:int(read("Day_of_week")), End_hour:int(read("End_hour")), End_minute:int(read("End_minute")), Start_hour:int(read("Start_hour")), Start_minute:int(read("Start_minute"))];
 	}
@@ -156,14 +158,29 @@ species traffic_counts{string counter;int hour; int minute;int sp_car;int nb_car
 		else if day_of_week<=current_day and hour<=current_hour  and minute<current_minute{do die;}
 	}
 }
+species origin_destinations{string counter; int hour; int minute; int nb_car; int nb_truck; string destination;
+	reflex clean when:every(15#mn){
+		if hour<current_hour {do die;}
+		else if  hour<=current_hour  and minute<current_minute{do die;}
+	}
+}
 species traffic_counters{
 	string name;
+	string destination;
 	string type;
 	int npkw;
 	int nlkw;
 	int cars_counted; int trucks_counted; int car_speed; int truck_speed;
+	
+	reflex origin_destination when:name contains ('OD') and every(15#mn){
+		cars_counted<-int((int(origin_destinations where (each.hour = current_hour and (each.minute >= current_minute and each.minute < current_minute+15) and each.counter = self.name) sum_of(each.nb_car)))/3); //extrapolate to every 5 minutes
+		trucks_counted<-int((int(origin_destinations where (each.hour = current_hour and (each.minute >= current_minute and each.minute < current_minute+15) and each.counter = self.name) sum_of(each.nb_truck)))/3);
+		if bool(origin_destinations where (each.hour = current_hour and (each.minute >= current_minute and each.minute < current_minute+15) and each.counter = self.name)){
+			destination <-one_of(origin_destinations where (each.hour = current_hour and (each.minute >= current_minute and each.minute < current_minute+15) and each.counter = self.name)).destination;
+	}}
+	
 
-	reflex update_numbers when:every(5#mn){//all traffic counters (shapefile) take their numbers from the traffic counts (csv) every 5 minutes.
+	reflex update_numbers when:(name contains ('t') or name contains ('DG')) and every(5#mn){//all traffic counters (shapefile) take their numbers from the traffic counts (csv) every 5 minutes.
 		cars_counted<-int(traffic_counts where (each.hour = current_hour and (each.minute >= current_minute and each.minute < current_minute+5) and each.day_of_week = current_day and each.counter = self.name) sum_of(each.nb_car));
 		trucks_counted<-int(traffic_counts where (each.hour = current_hour and (each.minute >= current_minute and each.minute < current_minute+5) and each.day_of_week = current_day and each.counter = self.name) sum_of(each.nb_truck));
 		car_speed<-int(traffic_counts where (each.hour = current_hour and (each.minute >= current_minute and each.minute < current_minute+5) and each.day_of_week = current_day and each.counter = self.name) mean_of(each.sp_car));
@@ -173,8 +190,8 @@ species traffic_counters{
 		if self.name="from_t"{self.cars_counted <- [((traffic_counters where(type="exit")) sum_of each.cars_counted)-((traffic_counters where(type="entry")) sum_of each.cars_counted),0]max_of each;}
 	}
 	//to have a constant inflow of vehicles, 1 vehicle every 5/n minutes are created, being n the sum of vehicles registered every 5 minutes.
-	reflex creation_cars when:every((5/[cars_counted,1] max_of each)#mn){if type="entry"{create car number:1 with: [location::location]{own_speed<-myself.car_speed;}}}
-	reflex creation_trucks when:every((5/[trucks_counted,1] max_of each)#mn){if type="entry"{create truck number:1 with: [location::location]{own_speed<-myself.truck_speed;}}}
+	reflex creation_cars when:every((5/[cars_counted,1] max_of each)#mn){if type="entry"{create car number:1 with: [location::location]{own_speed<-myself.car_speed;final_target<-one_of(traffic_counters where (each.name = myself.destination));}}}
+	reflex creation_trucks when:every((5/[trucks_counted,1] max_of each)#mn){if type="entry"{create truck number:1 with: [location::location]{own_speed<-myself.truck_speed;final_target<-one_of(traffic_counters where (each.name = myself.destination));}}}
 	reflex restart_counter when: every(5#mn){
 		npkw <- 0;
 		nlkw <- 0;
@@ -293,7 +310,7 @@ species car skills: [moving] control:fsm{
 			}
 		counted_by_counter_control <- traffic_counters inside geometry(cone(heading-angle,heading+angle) intersection circle(15));
 		
-		//Adapts speed to vehicle before him
+		//Adapts speed to vehicle before them
 		if not empty(nearby_cars+nearby_trucks-self) {
 			loop obs over: (nearby_cars+nearby_trucks-self){
 				new_speed <- int(((nearby_cars+nearby_trucks-self) closest_to self).real_speed)-5; //makes the car go 5km/h slower than the car in the front
