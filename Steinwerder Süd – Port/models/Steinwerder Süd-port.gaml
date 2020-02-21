@@ -102,7 +102,15 @@ global {
 	reflex time_update when: every(1#mn) {
 		current_minute <- current_minute +1;
 		if current_minute > 59{current_minute <- 0; current_hour <- current_hour+1;}
-		if current_hour > 23{current_hour <- 0; current_day <- current_day+1;} 
+		if current_hour > 23 and current_day=1{
+			current_hour <- 0; current_day <- 6;
+		} 
+		if current_hour > 23 and current_day=6{
+			current_hour <- 0; current_day <- 7;
+		} 
+		if current_hour > 23 and current_day=7{
+			current_hour <- 0; current_day <- 1;
+		} 
 		if current_minute>9{time_info <- "Day: " + string (current_day) + " Hour: " + string(current_hour) + ":"+string(current_minute);}
 		else {time_info <- "Day: " + string (current_day) + " Hour: " + string(current_hour) + ":0"+string(current_minute);}
 		if current_hour < 6{current_day_quarter<-1;}else if current_hour >= 6 and current_hour < 12{current_day_quarter<-2;}
@@ -151,17 +159,28 @@ global {
 }
 //species waterway{}
 //species railway{}
-//species shoreline{aspect default{draw shape color:#white;}}
-species traffic_counts{string counter;int hour; int minute;int sp_car;int nb_car;int sp_truck;int nb_truck;int day_of_week;
+//species shoreline{aspect default{draw shape color: rgb(242, 141, 186);}}
+species traffic_counts{string counter;int hour; int minute;int sp_car;int nb_car;int sp_truck;int nb_truck;int day_of_week; bool modeled;
 	reflex clean when:every(5#mn){
 		if hour<current_hour and day_of_week<=current_day{do die;}
 		else if day_of_week<=current_day and hour<=current_hour  and minute<current_minute{do die;}
 	}
+	reflex clean when: every(1#day){ //eliminates csv rows not included in the shapefile.
+		list<traffic_counters>traffic_counters_modeled <- traffic_counters where(each.type="exit" or each.type="entry");
+		loop obs over: traffic_counters_modeled{ if obs.name = self.counter{ modeled<-true;}}
+		if not modeled{do die;}
+	}
+	
 }
-species origin_destinations{string counter; int hour; int minute; int nb_car; int nb_truck; string destination;
-	reflex clean when:every(15#mn){
+species origin_destinations{string counter; int hour; int minute; int nb_car; int nb_truck; string destination; bool modeled;
+	reflex clean2 when:every(15#mn){
 		if hour<current_hour {do die;}
 		else if  hour<=current_hour  and minute<current_minute{do die;}
+	}
+	reflex clean when: every(1#day){ //eliminates csv rows not included in the shapefile.
+		list<traffic_counters>traffic_counters_modeled <- traffic_counters where(each.type="exit" or each.type="entry");
+		loop obs over: traffic_counters_modeled{ if obs.name = self.counter{ modeled<-true;}}
+		if not modeled{do die;}
 	}
 }
 species traffic_counters{
@@ -199,7 +218,7 @@ species traffic_counters{
 }
 species traffic_light_schedule{
 	int Crossing; int Programme; string Group; int Duration; int Start_green; int End_green; int Day_of_week; int End_hour; int End_minute; int Start_hour; int Start_minute;
-	
+	bool modeled;
 	reflex active_programm when:current_day=Day_of_week and (current_hour >= Start_hour and current_hour < End_hour) and every(1#mn){
 		ask traffic_light where(each.group = self.Group and each.crossing = self.Crossing){
 			duration_sequence <- myself.Duration;
@@ -207,6 +226,12 @@ species traffic_light_schedule{
 			end_green <- myself.End_green;
 		}
 	}
+	reflex clean when: every(1#day){ //eliminates csv rows not included in the shapefile.
+		list<traffic_light>traffic_lights_modeled;
+		loop obs over: traffic_lights_modeled{ if obs.crossing = self.Crossing{ if obs.group = self.Group{ modeled<-true;}}}
+		if not modeled{do die;}
+	}
+	
 }
 species traffic_light{
 	string group; int crossing;
@@ -261,9 +286,9 @@ species road{
 	}
 	
 	aspect default {
+		if over_capacity and not over_congestion {draw "Over Design Capacity (OC)" color:#gray font:font("Helvetica", 10, #plain);}
+		else if not over_capacity and over_congestion{draw "Over Saturation (OS)" color:#red font:font("Helvetica", 10, #plain);}
 		draw (shape) color: rgb(40+color,50+color,60+color);
-		if over_capacity and not over_congestion {draw "Flow:"+string(flow)+"veh/h Density:"+string(density)+"veh/m Speed Drop:"+string(speed_drop)+"% Delay:"+string(time_delay)+"s" color:#gray font:font("Helvetica", 8, #plain);}
-		else if not over_capacity and over_congestion{draw "Flow:"+string(flow)+"veh/h Density:"+string(density)+"veh/m Speed Drop:"+string(speed_drop)+"% Delay:"+string(time_delay)+"s" color:#red font:font("Helvetica", 8, #plain);}
 	}
 }
 species car skills: [moving] control:fsm{
@@ -276,7 +301,7 @@ species car skills: [moving] control:fsm{
 	bool waiting; //if it's first in line to traffic light
 	bool waiting_behind; //the vehicle before is waiting
 	point old_location;
-	int n<-2; //adaptation factor for detection of things (see further)
+	float n<-3.5; //adaptation factor for detection of things (see further)
 	int stop_distance<-10;
 	
 	reflex target_choice  when: final_target = nil{final_target<-(one_of(car_destinations));} //the list of car destinations is weighted (see above reflex function)
@@ -327,13 +352,13 @@ species car skills: [moving] control:fsm{
 	
 	reflex stop_ampel{ //Stops in traffic light
 		waiting<-false;
-		list<traffic_light> nearby_ampel <- traffic_light inside geometry(cone(heading-angle*n,heading+angle*n) intersection circle(10));
+		list<traffic_light> nearby_ampel <- traffic_light inside geometry(cone(heading-angle*n,heading+angle*n) intersection circle(15));
 		if not empty(nearby_ampel) { loop obs over: (nearby_ampel){ if (nearby_ampel closest_to self).is_red {waiting<-true;color<-#gray;}}}	
 		}
 	
 	aspect default {
 		draw rectangle(10,5) color:color rotate:heading;
-		//draw geometry(cone(heading-angle,heading+angle) intersection circle(15)) color: color;
+		//draw geometry(cone(heading-angle*n,heading+angle*n) intersection circle(15)) color: #cyan;
 	}
 }
 species truck parent:car{
@@ -434,7 +459,7 @@ experiment SWS type: gui {
 	parameter "Time horizon of phase (months)" var: time_horizon init:12 min:1 max:36 category: "Set up";
 	parameter "% of Boat usage" var: boat_proportion init:0 min:0 max:100 category: "Set up";
 	parameter "Simulation Speed" var:cycle_equals init:1.0 min:0.5 max:2.0 category:"Calibrating";
-	parameter "Starting Hour" var:current_hour init:12 min:0 max:23 category:"Calibrating";
+	parameter "Starting Hour" var:current_hour init:21 min:0 max:23 category:"Calibrating";
 	parameter "Speed Variation" var: adaptative_speed_factor init:10 min:1 max:100 category:"Calibrating";
 	output {
 		layout #split;
@@ -482,7 +507,7 @@ experiment SWS type: gui {
 			species sand aspect:default;
 			species landfill aspect:default;
 			species sand_sources aspect:default;
-			//species shoreline aspect:default;
+			//species shoreline aspect:default transparency:0.9;
 			
 			
 			overlay position: { 5, 5 } size: { 240 #px, 680 #px } background:rgb(55,62,70) transparency:1.0{
