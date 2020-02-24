@@ -14,6 +14,7 @@ global {
 	file boundary <- file(cityGISFolder + "bounds.shp");
 	
 	file road_traffic <- shape_file(Scenario + "roads-detail-multiline.shp");//-multiline.shp");
+	file file_direction_control <- shape_file(Scenario + "direction-control.shp");
 	//file railway_traffic <- shape_file(Scenario + "railways.shp");
 	//file waterway_traffic <- shape_file(Scenario + "waterways.shp");
 	file shape_landfill <- shape_file(Scenario + "landfill.shp");
@@ -144,7 +145,7 @@ global {
 		create road from:road_traffic with:[road_speed:float(read("maxspeed")),lines:int(read("lines")),avail_dest:string(read("avail_dest"))];
 		road_weights <- road as_map (each::each.shape.perimeter);
 		road_network <- as_edge_graph(road);
-		
+		create direction_control from: file_direction_control with:[control:int(read("id")), sequence:int(read("ord"))];
 		create landfill from:shape_landfill with:[capacity:int(read("capacity")), phase:string(read("type"))];
 		create sand_sources from:shape_sand_sources;
 		//create shoreline from:shape_shoreline;
@@ -245,9 +246,12 @@ species traffic_light{
 		if start_green>end_green {
 			if (t>end_green and t>=start_green) or (t<end_green and t<=start_green){is_red<-false;}else{is_red<-true;}}
 		}
+	reflex stop_cars when: is_red{
+		ask car at_distance (2){waiting<-true;}
+	}
 	aspect default {if is_red {color<-#red;}else {color<-#green;} draw circle(3) color:color;}
 }
-
+species direction_control{int control; int sequence;}
 species road{
 	string avail_dest;
 	float capacity <- 1+(shape.perimeter*lines)/adaptative_speed_factor; // This factor relates the number of cars per segment and the speed of them
@@ -303,7 +307,8 @@ species car skills: [moving] control:fsm{
 	point old_location;
 	float n<-3.5; //adaptation factor for detection of things (see further)
 	int stop_distance<-10;
-	
+	direction_control current_checkpoint;
+	direction_control previous_checkpoint;
 	reflex target_choice  when: final_target = nil{final_target<-(one_of(car_destinations));} //the list of car destinations is weighted (see above reflex function)
 	
 	reflex clean when:every(2#mn){
@@ -340,19 +345,29 @@ species car skills: [moving] control:fsm{
 			loop obs over: (nearby_cars+nearby_trucks-self){
 				new_speed <- int(((nearby_cars+nearby_trucks-self) closest_to self).real_speed)-5; //makes the car go 5km/h slower than the car in the front
 	
-		//Avoid counterdirection
-				if abs((((nearby_cars+nearby_trucks-self) closest_to self).heading)-self.heading) > 180 {do die;}
+		//Avoid counterdirection with other cars
+				//if abs((((nearby_cars+nearby_trucks-self) closest_to self).heading)-self.heading) > 180 {do die;}
 				
 		//Stops if car before is stopped
 				if ((nearby_cars+nearby_trucks-self) closest_to self).waiting or ((nearby_cars+nearby_trucks-self) closest_to self).waiting_behind{
 					waiting_behind<-true;	
 				}
 				color<-#gray;}}
+		
+		//Avoid counterdirection with checkpoints
+		if not empty(direction_control at_distance(5)){current_checkpoint<-direction_control at_distance(5) closest_to self;}
+		
+		if not (current_checkpoint=nil) and not (previous_checkpoint=nil){
+			if current_checkpoint.control = previous_checkpoint.control and current_checkpoint.sequence<previous_checkpoint.sequence{ 
+					do die;
+			}else{previous_checkpoint<-current_checkpoint;}
+		}else{previous_checkpoint<-current_checkpoint;}
+
 	}
 	
 	reflex stop_ampel{ //Stops in traffic light
 		waiting<-false;
-		list<traffic_light> nearby_ampel <- traffic_light inside geometry(cone(heading-angle*n,heading+angle*n) intersection circle(15));
+		list<traffic_light> nearby_ampel <- traffic_light at_distance(4);
 		if not empty(nearby_ampel) { loop obs over: (nearby_ampel){ if (nearby_ampel closest_to self).is_red {waiting<-true;color<-#gray;}}}	
 		}
 	
