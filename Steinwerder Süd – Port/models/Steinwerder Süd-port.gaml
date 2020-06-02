@@ -141,6 +141,15 @@ global {
 		road_network <- road_network with_weights road_weights;
 	}
 	
+	//percentages in type of engine: electric, fosssil = (gasoline + diesel)
+	float electric <- electric;
+	float fossil<- fossil update:(100-electric);
+	float fuel;
+	float diesel <- diesel update: fossil*(fuel/100);
+	float gasoline <- gasoline update: fossil*((100-fuel)/100);
+	
+	float emissions <- 1.0 update: length(car)*(diesel/100)+length(car)*(gasoline/100);
+	
 	init{
 		create road from:road_traffic with:[road_speed:float(read("maxspeed")),lines:int(read("lines")),avail_dest:string(read("avail_dest"))];
 		road_weights <- road as_map (each::each.shape.perimeter);
@@ -171,7 +180,6 @@ species traffic_counts{string counter;int hour; int minute;int sp_car;int nb_car
 		loop obs over: traffic_counters_modeled{ if obs.name = self.counter{ modeled<-true;}}
 		if not modeled{do die;}
 	}
-	
 }
 species origin_destinations{string counter; int hour; int minute; int nb_car; int nb_truck; string destination; bool modeled;
 	reflex clean2 when:every(15#mn){
@@ -197,8 +205,8 @@ species traffic_counters{
 		trucks_counted<-int((int(origin_destinations where (each.hour = current_hour and (each.minute >= current_minute and each.minute < current_minute+15) and each.counter = self.name) sum_of(each.nb_truck)))/3);
 		if bool(origin_destinations where (each.hour = current_hour and (each.minute >= current_minute and each.minute < current_minute+15) and each.counter = self.name)){
 			destination <-one_of(origin_destinations where (each.hour = current_hour and (each.minute >= current_minute and each.minute < current_minute+15) and each.counter = self.name)).destination;
-	}}
-	
+		}
+	}
 
 	reflex update_numbers when:(name contains ('t') or name contains ('DG')) and every(5#mn){//all traffic counters (shapefile) take their numbers from the traffic counts (csv) every 5 minutes.
 		cars_counted<-int(traffic_counts where (each.hour = current_hour and (each.minute >= current_minute and each.minute < current_minute+5) and each.day_of_week = current_day and each.counter = self.name) sum_of(each.nb_car));
@@ -220,7 +228,7 @@ species traffic_counters{
 species traffic_light_schedule{
 	int Crossing; int Programme; string Group; int Duration; int Start_green; int End_green; int Day_of_week; int End_hour; int End_minute; int Start_hour; int Start_minute;
 	bool modeled;
-	reflex active_programm when:current_day=Day_of_week and (current_hour >= Start_hour and current_hour < End_hour) and every(1#mn){
+	reflex active_programm when:current_day=Day_of_week and (current_hour >= Start_hour and current_hour <= End_hour) and every(1#mn){
 		ask traffic_light where(each.group = self.Group and each.crossing = self.Crossing){
 			duration_sequence <- myself.Duration;
 			start_green <- myself.Start_green;
@@ -231,8 +239,7 @@ species traffic_light_schedule{
 		list<traffic_light>traffic_lights_modeled;
 		loop obs over: traffic_lights_modeled{ if obs.crossing = self.Crossing{ if obs.group = self.Group{ modeled<-true;}}}
 		if not modeled{do die;}
-	}
-	
+	}	
 }
 species traffic_light{
 	string group; int crossing;
@@ -307,8 +314,9 @@ species car skills: [moving] control:fsm{
 	point old_location;
 	float n<-3.5; //adaptation factor for detection of things (see further)
 	int stop_distance<-10;
-	direction_control current_checkpoint;
+	direction_control current_checkpoint; //prevents cars from driving counterdirection
 	direction_control previous_checkpoint;
+	
 	reflex target_choice  when: final_target = nil{final_target<-(one_of(car_destinations));} //the list of car destinations is weighted (see above reflex function)
 	
 	reflex clean when:every(2#mn){
@@ -362,7 +370,6 @@ species car skills: [moving] control:fsm{
 					do die;
 			}else{previous_checkpoint<-current_checkpoint;}
 		}else{previous_checkpoint<-current_checkpoint;}
-
 	}
 	
 	reflex stop_ampel{ //Stops in traffic light
@@ -389,6 +396,7 @@ species truck parent:car{
 species sand_truck parent:car{
 	int capacity <- truck_capacity;
 	traffic_counters final_target<-(one_of(traffic_counters where (each.name = "termin")));
+	sand_sources origin;
 	
 	reflex go_to_destination when: not waiting and not waiting_behind{
 		do goto target:final_target.location on: road_network  recompute_path: false  move_weights:road_weights speed:mean(new_speed,rd_speed);
@@ -396,7 +404,11 @@ species sand_truck parent:car{
 			if capacity>1{ //when they arrive full to the storege/landfill
 				create sand number:1 with: [location::self.location]{capacity<-myself.capacity;}
 				final_target<-(one_of(traffic_counters where (each.name = "DG81")));
-				create sand_truck number:1 with: [location::point(one_of(traffic_counters where (each.name = "from_t")))]{capacity<-0; final_target<-(one_of(traffic_counters where (each.name = "DG81")));}
+				create sand_truck number:1 with: [location::point(one_of(traffic_counters where (each.name = "from_t")))]{
+					origin<-myself.origin;
+					capacity<-0; 
+					final_target<-traffic_counters where (each.type ="exit") closest_to point(origin);
+				}
 				do die;
 			}else{do die;} //when they arrive empty to the final exit location
 		}
@@ -417,7 +429,7 @@ species sand_sources{
 	float carried_by_truck<-capacity-carried_by_boat;
 	rgb color;
 	reflex create_sand_trucks when: active and scenario>1 and every (inv_truck_frequency*length(sand_sources where each.active) #mn){
-		create sand_truck number:1 with: [location::location];carried_by_truck<-carried_by_truck-truck_capacity;
+		create sand_truck number:1 with: [location::location]{origin<-myself;}carried_by_truck<-carried_by_truck-truck_capacity;
 		if carried_by_truck<1{active<-false;}
 		ask landfill where each.active_phase{filled<-int((filled+(myself.carried_by_boat))/length(landfill where each.active_phase));}
 	}
@@ -446,12 +458,14 @@ species sand skills:[moving]{
 }
 
 species landfill{
-	int capacity; int filled; int remaining<- 0 update: (capacity-filled); float complete <- 0.0 update: (filled/capacity);
+	int capacity; int filled;
 	string phase;
 	bool active_phase;
+	int remaining<- 0 update: (capacity-filled);
+	float complete <- 0.0 update: (filled/capacity);
 	
 	reflex update_phase when: every(1#h){
-		if scenario = 1 and phase="ausbau" and complete <1 {active_phase<-true; filled<-capacity;}
+		if scenario = 1 and phase="ausbau" {active_phase<-true; filled<-capacity;}
 		else if scenario = 2 and phase="storage" and complete <1 {active_phase<-true; filled<-330000;}
 		else if scenario = 3 and phase="einbau" and complete <1 {active_phase<-true; filled<-991000;}
 		else {active_phase<-false;}
@@ -467,12 +481,13 @@ species landfill{
 	}
 }
 
-
 experiment SWS type: gui {
 	parameter "Scenario (1.ausbau; 2.storage, 3.einbau)" var: scenario init:1 min:1 max:3 category: "Set up";
 	parameter "Truck capacity (m3)" var: truck_capacity init:90 min:1 max:200 category: "Set up";
 	parameter "Time horizon of phase (months)" var: time_horizon init:12 min:1 max:36 category: "Set up";
 	parameter "% of Boat usage" var: boat_proportion init:0 min:0 max:100 category: "Set up";
+	parameter "Combustion % Electric" var: electric init:1.0 min:1.0 max:100.0 category: "Envitonment";
+	parameter "Diesel % Gasoline" var: fuel init:1.0 min:1.0 max:100.0 category: "Envitonment";
 	parameter "Simulation Speed" var:cycle_equals init:1.0 min:0.5 max:2.0 category:"Calibrating";
 	parameter "Starting Hour" var:current_hour init:21 min:0 max:23 category:"Calibrating";
 	parameter "Speed Variation" var: adaptative_speed_factor init:10 min:1 max:100 category:"Calibrating";
@@ -484,6 +499,16 @@ experiment SWS type: gui {
 				data "Trucks in model" value: length(truck) color: rgb(141, 242, 215) marker_size:0 thickness:1.5;
 				data "Cars entering by data" value: (traffic_counters where(each.type="entry") sum_of each.cars_counted) color: rgb(168, 50, 94) marker_size:0 thickness:0.75;
 				data "Trucks entering by data" value:(traffic_counters where(each.type="entry") sum_of each.trucks_counted) color: rgb(34, 117, 115) marker_size:0 thickness:0.75;	
+			}
+			chart "Number of engines" type: series size:{0.5,0.2} position: {0,0.2} background: rgb(55,62,70) axes: #white color: #white legend_font:("Calibri") label_font:("Calibri") tick_font:("Calibri") title_font:("Calibri"){
+				data "Diesel" value: length(car)*(diesel/100) color: rgb(168, 50, 94) marker_size:0 thickness:1.5;
+				data "Gasoline" value: length(car)*(gasoline/100) color: rgb(34, 117, 115) marker_size:0 thickness:1.5;
+				data "Electric" value: length(car)*(electric/100) color: #white marker_size:0 thickness:1.5;
+			}
+			chart "Engine type" type: pie size:{0.5,0.2} position: {0.5,0.2} background: rgb(55,62,70) axes: #white color: #white legend_font:("Calibri") label_font:("Calibri") tick_font:("Calibri") title_font:("Calibri"){
+				data "Diesel" value: diesel color: rgb(168, 50, 94);
+				data "Gasoline" value:  gasoline color: rgb(34, 117, 115);
+				data "Electric" value:  electric color: #white;
 			}
 			chart "Time Delay" type: series size:{0.5,0.2} position: {0,0.4} background: rgb(55,62,70) axes: #white color: #white legend_font:("Calibri") label_font:("Calibri") tick_font:("Calibri") title_font:("Calibri"){
 				data "Time delay in s" value: road mean_of each.time_delay color: #gray marker_size:0 thickness:1.5;
@@ -524,18 +549,19 @@ experiment SWS type: gui {
 			species sand_sources aspect:default;
 			//species shoreline aspect:default transparency:0.9;
 			
-			
 			overlay position: { 5, 5 } size: { 240 #px, 680 #px } background:rgb(55,62,70) transparency:1.0{
 				rgb text_color<-rgb(179,186,196);
 				float y <-12#px;
 				draw time_info at:{25#px,y+8#px} color:#white font:font("Calibri",12,#plain);
 				y <-y+14#px;
-                draw  "Scenario: "+string(scenario) at:{25#px,y+8#px} color:#white font:font("Calibri",12,#plain);
+                draw  "Phase: "+string(scenario) at:{25#px,y+8#px} color:#white font:font("Calibri",12,#bold);
                 y <-y+14#px;
-                draw  "Amount of trucks needed: "+string(scenario) at:{25#px,y+8#px} color:#white font:font("Calibri",12,#plain);
-               	y <-y+14#px;
                 draw  "One truck every: "+string(inv_truck_frequency*length(sand_sources where each.active))+" minutes from each sand source" at:{25#px,y+8#px} color:#white font:font("Calibri",12,#plain);
-                
+                y <-y+14#px;
+                draw  "Trucks remaining to complete Phase: "+string((landfill where each.active_phase sum_of each.remaining) / truck_capacity) at:{25#px,y+8#px} color:#white font:font("Calibri",12,#plain);
+				y <-y+14#px;
+                draw  "Time remaining to complete Phase: "+string(time_horizon*20 - current_day)+" days" at:{25#px,y+8#px} color:#white font:font("Calibri",12,#plain);
+			
 			}
 ////////////////////User interaction starts here		
 			event mouse_move action: move;
