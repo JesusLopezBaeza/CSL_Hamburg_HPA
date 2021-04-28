@@ -15,6 +15,7 @@ Harbors are complex systems in which several agents are involved. Some ports hav
 
 More specifically, the project studies the most frequent flows and routes in the city of Hamburg, where cruise tourism in strongly related to its Central Train Station, since a great amount of passengers arrive to the city by train. Due to its size and the vast affluence of people on a regular basis, Hamburg Central Station is a major challenge spot in land transportation related to cruise tourism, specially regarding orientation and perception of spatial quality of incoming cruise passengers. Aiming to enhance comfort and efficiency through testing alternative mobility scenarios, this work acknowledges that the potential optimization of any port and port-related mobility process constitutes a major priority, as not only poses improvement for itself but to the entire harbour system.
 
+- - - -
 
 Publications about the project can be found here:
 
